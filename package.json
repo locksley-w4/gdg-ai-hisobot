@@ -1,0 +1,16 @@
+{
+  "name": "universal-financial-reporter",
+  "workspaces": [
+    "frontend",
+    "backend"
+  ],
+  "scripts": {
+    "dev-frontend": "npm run dev --prefix frontend",
+    "dev-backend": "npm run dev --prefix backend",
+    "dev": "concurrently \"npm run dev-frontend\" \"npm run dev-backend\""
+  },
+  "devDependencies": {
+    "@rolldown/binding-win32-x64-msvc": "^1.0.0-rc.17",
+    "concurrently": "latest"
+  }
+}
