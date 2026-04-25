@@ -6,6 +6,7 @@ export interface FinancialRecord {
   is_current: boolean;
   timestamp: string;
   source_file: string;
+  editor_name?: string;
 }
 
 export interface ExtractedMetric {

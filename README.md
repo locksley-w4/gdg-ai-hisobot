@@ -22,6 +22,18 @@ To run this application locally, you need:
         gcloud auth application-default login
         ```
 
+### Authenticate With A JSON Service Account Key (Alternative)
+
+If you want to authenticate using a service-account JSON key instead of local gcloud ADC:
+
+1. Create/download a service account key in Google Cloud IAM.
+2. Grant the service account access to Vertex AI in your project (for example, `Vertex AI User`).
+3. Set one of these in `backend/.env.local`:
+    * `GOOGLE_APPLICATION_CREDENTIALS=D:/path/to/your-service-account.json` (recommended)
+    * `GOOGLE_SERVICE_ACCOUNT_KEY_JSON={...}` (single-line JSON)
+
+When either value is set, the backend proxy will use the service account automatically.
+
 *   **Node.js and npm**: Ensure you have Node.js and its package manager, `npm`, installed on your machine.
 
 ## Project Structure

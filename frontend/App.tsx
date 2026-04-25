@@ -1,11 +1,11 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import { FinancialRecord, ExtractedMetric, TabType } from './types.ts';
 import { FileUpload } from './components/FileUpload.tsx';
 import { DataViewer } from './components/DataViewer.tsx';
 import { TemplateDesigner } from './components/TemplateDesigner.tsx';
 import { AuditorAnalyst } from './components/AuditorAnalyst.tsx';
 import { ReportGenerator } from './components/ReportGenerator.tsx';
-import { LayoutDashboard, Database, FileEdit, ShieldCheck, FileOutput } from 'lucide-react';
+import { LayoutDashboard, Database, FileEdit, ShieldCheck, FileOutput, Lock } from 'lucide-react';
 
 const DEFAULT_TEMPLATE = `Quarterly Financial Summary
 
@@ -23,10 +23,38 @@ Notes:
 This report is automatically generated using the latest versioned data from the repository.`;
 
 export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [isSigningIn, setIsSigningIn] = useState(false);
+  
   const [records, setRecords] = useState<FinancialRecord[]>([]);
   const [template, setTemplate] = useState<string>(DEFAULT_TEMPLATE);
   const [activeTab, setActiveTab] = useState<TabType>('etl');
   const [auditReport, setAuditReport] = useState<string | null>(null);
+
+  useEffect(() => {
+    const token = sessionStorage.getItem('app_auth_token');
+    if (!token) return;
+
+    fetch('/auth/session', {
+      method: 'GET',
+      headers: {
+        'X-App-Auth': token,
+      },
+    })
+      .then((res) => {
+        if (res.ok) {
+          setIsAuthenticated(true);
+          return;
+        }
+        sessionStorage.removeItem('app_auth_token');
+      })
+      .catch(() => {
+        sessionStorage.removeItem('app_auth_token');
+      });
+  }, []);
 
   const handleDataExtracted = useCallback((newMetrics: ExtractedMetric[], filename: string) => {
     setRecords(prevRecords => {
@@ -59,7 +87,8 @@ export default function App() {
           version: nextVersion,
           is_current: true,
           timestamp,
-          source_file: filename
+          source_file: filename,
+          editor_name: sessionStorage.getItem('app_auth_user') || 'Authenticated User'
         });
       });
 
@@ -78,6 +107,82 @@ export default function App() {
     { id: 'auditor', label: 'AI Auditor', icon: ShieldCheck },
     { id: 'report', label: 'Generate Report', icon: FileOutput },
   ] as const;
+
+  if (!isAuthenticated) {
+    const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
+      e.preventDefault();
+      setAuthError(null);
+      setIsSigningIn(true);
+
+      try {
+        const response = await fetch('/auth/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ username, password }),
+        });
+
+        if (!response.ok) {
+          setAuthError('Invalid credentials. Please try again.');
+          setIsSigningIn(false);
+          return;
+        }
+
+        const data = await response.json();
+        sessionStorage.setItem('app_auth_token', data.token);
+        sessionStorage.setItem('app_auth_user', data.username || username);
+        setIsAuthenticated(true);
+      } catch (error) {
+        setAuthError('Sign-in failed. Check backend connectivity and try again.');
+      } finally {
+        setIsSigningIn(false);
+      }
+    };
+
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50">
+        <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-200 max-w-sm w-full">
+          <div className="flex justify-center mb-4">
+            <div className="bg-blue-100 p-3 rounded-full text-blue-600">
+              <Lock className="w-6 h-6" />
+            </div>
+          </div>
+          <h2 className="text-2xl font-bold text-center text-slate-800 mb-6">Login Required</h2>
+          <form onSubmit={handleLogin}>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-700 mb-1">Username</label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Enter your username"
+                required
+              />
+            </div>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-slate-700 mb-1">Password</label>
+              <input 
+                type="password" 
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Enter your password"
+                required
+              />
+            </div>
+            {authError && <p className="text-sm text-red-600 mb-3">{authError}</p>}
+            <button
+              type="submit"
+              disabled={isSigningIn}
+              className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-60"
+            >
+              {isSigningIn ? 'Signing in...' : 'Access Platform'}
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen flex flex-col">

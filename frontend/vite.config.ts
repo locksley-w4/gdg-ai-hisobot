@@ -12,9 +12,13 @@ export default defineConfig(({ mode }) => {
       server: {
         proxy: {
           //Target your Node.js backend
-          '/api-proxy': 'http://localhost:5000',
-          '/ws-proxy': {target: 'ws://localhost:5000', ws: true},
+          '/api-proxy': process.env.VITE_BACKEND_URL || 'http://localhost:5000',
+          '/ws-proxy': {
+             target: process.env.VITE_BACKEND_WS_URL || 'ws://localhost:5000', 
+             ws: true
+          },
         },
+        host: true,
       },
       plugins: react(),
       resolve: {

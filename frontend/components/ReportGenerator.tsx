@@ -43,22 +43,33 @@ export const ReportGenerator: React.FC<ReportGeneratorProps> = ({ records, templ
     });
   }, [records]);
 
-  // Get top 3 keys to display in the chart to avoid clutter
-  const topKeys = useMemo(() => {
-    const keys = Array.from(new Set(records.map(r => r.key)));
-    // Prioritize common important metrics if they exist
-    const priority = ['total_revenue', 'net_income', 'operating_expenses', 'ebitda'];
-    return keys.sort((a, b) => {
-      const indexA = priority.indexOf(a);
-      const indexB = priority.indexOf(b);
-      if (indexA !== -1 && indexB !== -1) return indexA - indexB;
-      if (indexA !== -1) return -1;
-      if (indexB !== -1) return 1;
-      return 0;
-    }).slice(0, 3);
-  }, [records]);
+  // Get relevant keys to display in the chart based on the template content
+  const relevantKeys = useMemo(() => {
+    // Extract all {{key}} from the current template
+    const matches = Array.from(template.matchAll(/\{\{(.*?)\}\}/g)).map(m => m[1]);
+    const templateKeys = Array.from(new Set(matches));
+    
+    // Filter to keys that actually exist in records
+    const existingKeys = Array.from(new Set(records.map(r => r.key)));
+    const keysToChart = templateKeys.filter(k => existingKeys.includes(k));
+    
+    // If template has NO variables, fallback to top 4 common metrics
+    if (keysToChart.length === 0) {
+      const priority = ['total_revenue', 'net_income', 'operating_expenses', 'ebitda'];
+      return existingKeys.sort((a, b) => {
+        const indexA = priority.indexOf(a);
+        const indexB = priority.indexOf(b);
+        if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+        if (indexA !== -1) return -1;
+        if (indexB !== -1) return 1;
+        return 0;
+      }).slice(0, 4);
+    }
+    
+    return keysToChart;
+  }, [template, records]);
 
-  const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+  const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4'];
 
   const handleDownloadPDF = async () => {
     setIsExporting(true);
@@ -159,7 +170,7 @@ export const ReportGenerator: React.FC<ReportGeneratorProps> = ({ records, templ
                           contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
                         />
                         <Legend wrapperStyle={{ paddingTop: '20px' }} />
-                        {topKeys.map((key, index) => (
+                        {relevantKeys.map((key, index) => (
                           <Line 
                             key={key} 
                             type="monotone" 
@@ -175,7 +186,7 @@ export const ReportGenerator: React.FC<ReportGeneratorProps> = ({ records, templ
                   </div>
                 </div>
                 <p className="text-xs text-center text-slate-400 mt-6 italic">
-                  * Chart displays the top {topKeys.length} metrics across historical versions.
+                  * Chart displays the metrics highlighted in the current report template across historical versions.
                 </p>
               </div>
             )}

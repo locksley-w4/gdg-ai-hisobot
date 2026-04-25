@@ -33,6 +33,10 @@ coverage/
 !.env.example
 !.env.*.example
 
+# Backend credentials
+backend/credentials/*.json
+!backend/credentials/.gitkeep
+
 # Caches
 .cache/
 .vite/

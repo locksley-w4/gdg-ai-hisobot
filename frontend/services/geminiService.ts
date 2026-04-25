@@ -35,7 +35,7 @@ export const extractFinancialData = async (csvData: string): Promise<ExtractedMe
   }
 };
 
-export const generateAuditReport = async (currentData: FinancialRecord[], historicalData: FinancialRecord[]): Promise<string> => {
+export const generateAuditReport = async (currentData: FinancialRecord[], historicalData: FinancialRecord[], language: string = 'english'): Promise<string> => {
   const prompt = `
 Act as a fintech financial insights agent.
 Analyze the following current and historical financial data.
@@ -47,6 +47,9 @@ ${JSON.stringify(currentData.map(d => ({ key: d.key, value: d.value, version: d.
 
 Historical Data:
 ${JSON.stringify(historicalData.map(d => ({ key: d.key, value: d.value, version: d.version })), null, 2)}
+
+IMPORTANT ALIGNMENT: 
+Please respond ONLY in the following language: ${language.toUpperCase()}. All headings, sections, and body texts must be mapped to ${language}.
   `;
 
   try {

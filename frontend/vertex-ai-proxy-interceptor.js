@@ -9,6 +9,7 @@
 (function() {
   const originalFetch = window.fetch;
   const originalWebSocket = window.WebSocket;
+  const proxyHeader = import.meta.env?.VITE_PROXY_HEADER;
 
   // Function to validate VertexGenAi endpoints
   function isValidUrl(url) {
@@ -71,12 +72,17 @@
     const inputUrl = typeof url === 'string' ? url : (url instanceof URL ? url.href : null);
 
     if (inputUrl && isValidUrl(inputUrl)) {
+      const appAuthToken = sessionStorage.getItem('app_auth_token');
+      if (!appAuthToken) {
+        throw new Error('Missing auth session token. Please sign in again.');
+      }
       
       console.log('[Vertex AI Proxy Shim] Intercepted Vertex WebSocket request:', inputUrl);
       const targetUrl = encodeURIComponent(inputUrl);
+      const authToken = encodeURIComponent(appAuthToken);
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const host = window.location.host;
-      const proxyUrl = `${protocol}//${host}/ws-proxy?target=${targetUrl}`;
+      const proxyUrl = `${protocol}//${host}/ws-proxy?target=${targetUrl}&authToken=${authToken}`;
       return new originalWebSocket(proxyUrl, protocols);
     }
     return new originalWebSocket(url, protocols);
@@ -107,13 +113,26 @@
       };
 
       try {
+        const appAuthToken = sessionStorage.getItem('app_auth_token');
+        if (!proxyHeader || !appAuthToken) {
+          return new Response(JSON.stringify({
+            error: 'Authentication missing',
+            details: 'Missing proxy configuration or user session token.',
+          }), {
+            status: 401,
+            statusText: 'Unauthorized',
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
         // Make a fetch request to the local Node JS proxy endpoint.
         const proxyFetchOptions = {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             // Add a random header to identify these proxied requests on the Node.js backend.
-            'X-App-Proxy': 'E2CGQbhhNArm5Ot9-y-yR5F_k0n0qK1S',
+            'X-App-Proxy': proxyHeader,
+            'X-App-Auth': appAuthToken,
           },
           body: JSON.stringify(requestDetails),
         };
