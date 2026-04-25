@@ -12,6 +12,7 @@ import rateLimit from 'express-rate-limit';
 import { WebSocketServer, WebSocket } from 'ws';
 import fs from 'fs';
 import crypto from 'crypto';
+import { fileURLToPath } from 'url';
 
 const app = express();
 app.use(express.json({limit: process?.env?.API_PAYLOAD_MAX_SIZE || "7mb"}));
@@ -31,15 +32,17 @@ if (!PROXY_HEADER) {
   process.exit(1);
 }
 
-const APP_BASIC_AUTH_USER = process?.env?.APP_BASIC_AUTH_USER;
-const APP_BASIC_AUTH_PASS = process?.env?.APP_BASIC_AUTH_PASS;
-if (!APP_BASIC_AUTH_USER || !APP_BASIC_AUTH_PASS) {
-  console.error("Error: Environment variables APP_BASIC_AUTH_USER and APP_BASIC_AUTH_PASS must be set.");
-  process.exit(1);
+const APP_BASIC_AUTH_USER = process?.env?.APP_BASIC_AUTH_USER || 'admin';
+const APP_BASIC_AUTH_PASS = process?.env?.APP_BASIC_AUTH_PASS || '123';
+if (!process?.env?.APP_BASIC_AUTH_USER || !process?.env?.APP_BASIC_AUTH_PASS) {
+  console.warn('[Auth] APP_BASIC_AUTH_USER/APP_BASIC_AUTH_PASS missing. Falling back to defaults (admin/123).');
 }
 
 const AUTH_TOKEN_TTL_MS = Number(process?.env?.APP_AUTH_TOKEN_TTL_MS || 12 * 60 * 60 * 1000);
+const APP_AUTH_ALLOW_ANY_LOGIN = process?.env?.APP_AUTH_ALLOW_ANY_LOGIN !== 'false';
+const APP_AUTH_USER_STORE_FILE = process?.env?.APP_AUTH_USER_STORE_FILE || './users.json';
 const authSessions = new Map();
+const registeredUsers = new Map();
 
 function resolveGoogleAuthOptions() {
   const inlineServiceAccountJson = process?.env?.GOOGLE_SERVICE_ACCOUNT_KEY_JSON;
@@ -85,6 +88,69 @@ function issueSessionToken(username) {
   return { token, expiresAt };
 }
 
+function getUserStorePath() {
+  if (APP_AUTH_USER_STORE_FILE.startsWith('/') || /^[A-Za-z]:\\/.test(APP_AUTH_USER_STORE_FILE)) {
+    return APP_AUTH_USER_STORE_FILE;
+  }
+  return fileURLToPath(new URL(APP_AUTH_USER_STORE_FILE, import.meta.url));
+}
+
+function createPasswordHash(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const digest = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${digest}`;
+}
+
+function verifyPassword(password, encodedHash) {
+  const [salt, storedDigest] = String(encodedHash || '').split(':');
+  if (!salt || !storedDigest) return false;
+  const digest = crypto.scryptSync(password, salt, 64).toString('hex');
+  return safeEquals(digest, storedDigest);
+}
+
+function loadRegisteredUsers() {
+  const userStorePath = getUserStorePath();
+  if (!fs.existsSync(userStorePath)) return;
+
+  try {
+    const raw = fs.readFileSync(userStorePath, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return;
+
+    parsed.forEach((user) => {
+      if (!user || typeof user.username !== 'string' || typeof user.passwordHash !== 'string') return;
+      registeredUsers.set(user.username, {
+        passwordHash: user.passwordHash,
+        createdAt: user.createdAt || null,
+      });
+    });
+  } catch (error) {
+    console.error('[Auth] Failed to load users from store:', error.message);
+  }
+}
+
+function saveRegisteredUsers() {
+  const userStorePath = getUserStorePath();
+  const serializable = Array.from(registeredUsers.entries()).map(([username, details]) => ({
+    username,
+    passwordHash: details.passwordHash,
+    createdAt: details.createdAt,
+  }));
+  fs.writeFileSync(userStorePath, JSON.stringify(serializable, null, 2), 'utf8');
+}
+
+function isValidUsername(username) {
+  if (typeof username !== 'string') return false;
+  const trimmed = username.trim();
+  if (trimmed.length < 3 || trimmed.length > 64) return false;
+  return /^[A-Za-z0-9._-]+$/.test(trimmed);
+}
+
+function isValidPassword(password) {
+  if (typeof password !== 'string') return false;
+  return password.length >= 6;
+}
+
 function getAuthTokenFromRequest(req) {
   const token = req.headers['x-app-auth'];
   return typeof token === 'string' ? token : null;
@@ -111,20 +177,59 @@ function requireAppAuth(req, res, next) {
 
 app.set('trust proxy', 1 /* number of proxies between user and server */);
 
+loadRegisteredUsers();
+
 app.post('/auth/login', (req, res) => {
   const { username, password } = req.body || {};
   if (typeof username !== 'string' || typeof password !== 'string') {
     return res.status(400).json({ error: 'Bad Request', message: 'username and password are required.' });
   }
 
-  const isValidUser = safeEquals(username, APP_BASIC_AUTH_USER);
-  const isValidPass = safeEquals(password, APP_BASIC_AUTH_PASS);
-  if (!isValidUser || !isValidPass) {
-    return res.status(401).json({ error: 'Unauthorized', message: 'Invalid credentials.' });
+  const storedUser = registeredUsers.get(username);
+  if (storedUser) {
+    if (!verifyPassword(password, storedUser.passwordHash)) {
+      return res.status(401).json({ error: 'Unauthorized', message: 'Invalid credentials.' });
+    }
+    const { token, expiresAt } = issueSessionToken(username);
+    return res.status(200).json({ token, username, expiresAt });
+  }
+
+  const isBasicAuthUser = safeEquals(username, APP_BASIC_AUTH_USER) && safeEquals(password, APP_BASIC_AUTH_PASS);
+  if (isBasicAuthUser || APP_AUTH_ALLOW_ANY_LOGIN) {
+    const { token, expiresAt } = issueSessionToken(username);
+    return res.status(200).json({ token, username, expiresAt });
+  }
+
+  return res.status(401).json({ error: 'Unauthorized', message: 'Invalid credentials.' });
+});
+
+app.post('/auth/signup', (req, res) => {
+  const { username, password } = req.body || {};
+  if (!isValidUsername(username) || !isValidPassword(password)) {
+    return res.status(400).json({
+      error: 'Bad Request',
+      message: 'Username must be 3-64 chars (letters/numbers/._-) and password must be at least 6 chars.',
+    });
+  }
+
+  if (safeEquals(username, APP_BASIC_AUTH_USER) || registeredUsers.has(username)) {
+    return res.status(409).json({ error: 'Conflict', message: 'Username already exists.' });
+  }
+
+  registeredUsers.set(username, {
+    passwordHash: createPasswordHash(password),
+    createdAt: new Date().toISOString(),
+  });
+
+  try {
+    saveRegisteredUsers();
+  } catch (error) {
+    registeredUsers.delete(username);
+    return res.status(500).json({ error: 'Server Error', message: `Failed to save user: ${error.message}` });
   }
 
   const { token, expiresAt } = issueSessionToken(username);
-  return res.status(200).json({ token, username, expiresAt });
+  return res.status(201).json({ token, username, expiresAt });
 });
 
 app.get('/auth/session', requireAppAuth, (_req, res) => {

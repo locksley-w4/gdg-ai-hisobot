@@ -26,8 +26,10 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [username, setUsername] = useState('admin');
   const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authError, setAuthError] = useState<string | null>(null);
-  const [isSigningIn, setIsSigningIn] = useState(false);
+  const [isAuthSubmitting, setIsAuthSubmitting] = useState(false);
 
   const [records, setRecords] = useState<FinancialRecord[]>([]);
   const [template, setTemplate] = useState<string>(DEFAULT_TEMPLATE);
@@ -103,31 +105,67 @@ export default function App() {
     { id: 'report', label: 'Generate Report', icon: FileOutput },
   ] as const;
 
-  const handleLogin = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleLogin = async () => {
+    const response = await fetch('/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+
+    if (!response.ok) {
+      throw new Error('login_failed');
+    }
+
+    return response.json();
+  };
+
+  const handleSignup = async () => {
+    const response = await fetch('/auth/signup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password }),
+    });
+
+    if (!response.ok) {
+      let message = 'Sign-up failed.';
+      try {
+        const data = await response.json();
+        if (typeof data?.message === 'string' && data.message.length) {
+          message = data.message;
+        }
+      } catch (_ignored) {
+        // Ignore JSON parse failures and keep fallback message.
+      }
+      throw new Error(message);
+    }
+
+    return response.json();
+  };
+
+  const handleAuthSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     setAuthError(null);
-    setIsSigningIn(true);
+    setIsAuthSubmitting(true);
+
+    if (authMode === 'signup' && password !== confirmPassword) {
+      setAuthError('Passwords do not match.');
+      setIsAuthSubmitting(false);
+      return;
+    }
 
     try {
-      const response = await fetch('/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username, password }),
-      });
-
-      if (!response.ok) {
-        setAuthError('Invalid credentials. Use values from backend/.env.local (default: admin / 123).');
-        return;
-      }
-
-      const data = await response.json();
+      const data = authMode === 'signup' ? await handleSignup() : await handleLogin();
       sessionStorage.setItem('app_auth_token', data.token);
       sessionStorage.setItem('app_auth_user', data.username || username);
       setIsAuthenticated(true);
-    } catch (_error) {
-      setAuthError('Login failed. Check backend is running and Vite proxy config includes /auth routes.');
+    } catch (error) {
+      if (error instanceof Error && error.message !== 'login_failed') {
+        setAuthError(error.message);
+      } else {
+        setAuthError('Invalid credentials. Use backend/.env.local defaults (admin / 123) or create an account.');
+      }
     } finally {
-      setIsSigningIn(false);
+      setIsAuthSubmitting(false);
     }
   };
 
@@ -140,8 +178,13 @@ export default function App() {
               <Lock className="w-6 h-6" />
             </div>
           </div>
-          <h2 className="text-2xl font-bold text-center text-slate-800 mb-6">Login Required</h2>
-          <form onSubmit={handleLogin}>
+          <h2 className="text-2xl font-bold text-center text-slate-800 mb-2">
+            {authMode === 'login' ? 'Login Required' : 'Create Account'}
+          </h2>
+          <p className="text-sm text-slate-500 text-center mb-6">
+            {authMode === 'login' ? 'Access the platform with your credentials.' : 'Sign up to create a new account.'}
+          </p>
+          <form onSubmit={handleAuthSubmit}>
             <div className="mb-4">
               <label className="block text-sm font-medium text-slate-700 mb-1">Username</label>
               <input
@@ -149,7 +192,7 @@ export default function App() {
                 value={username}
                 onChange={(e) => setUsername(e.target.value)}
                 className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                placeholder="admin"
+                placeholder={authMode === 'login' ? 'admin' : 'choose a username'}
                 required
               />
             </div>
@@ -164,13 +207,45 @@ export default function App() {
                 required
               />
             </div>
+            {authMode === 'signup' && (
+              <div className="mb-4">
+                <label className="block text-sm font-medium text-slate-700 mb-1">Confirm Password</label>
+                <input
+                  type="password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="repeat password"
+                  required
+                />
+                <p className="text-xs text-slate-500 mt-2">Username must be 3+ chars. Password must be 6+ chars.</p>
+              </div>
+            )}
             {authError && <p className="text-sm text-red-600 mb-3">{authError}</p>}
             <button
               type="submit"
-              disabled={isSigningIn}
+              disabled={isAuthSubmitting}
               className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 rounded-lg transition-colors disabled:opacity-60"
             >
-              {isSigningIn ? 'Signing in...' : 'Access Platform'}
+              {isAuthSubmitting ? (authMode === 'login' ? 'Signing in...' : 'Creating account...') : (authMode === 'login' ? 'Access Platform' : 'Create Account')}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setAuthError(null);
+                setPassword('');
+                setConfirmPassword('');
+                setAuthMode((prev) => {
+                  const nextMode = prev === 'login' ? 'signup' : 'login';
+                  if (nextMode === 'signup' && username === 'admin') {
+                    setUsername('');
+                  }
+                  return nextMode;
+                });
+              }}
+              className="w-full mt-3 text-sm text-blue-600 hover:text-blue-700"
+            >
+              {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Sign in'}
             </button>
           </form>
         </div>
