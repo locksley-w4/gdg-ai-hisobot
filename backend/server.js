@@ -10,6 +10,8 @@ import { GoogleAuth } from 'google-auth-library';
 import fetch from 'node-fetch';
 import rateLimit from 'express-rate-limit';
 import { WebSocketServer, WebSocket } from 'ws';
+import fs from 'fs';
+import crypto from 'crypto';
 
 const app = express();
 app.use(express.json({limit: process?.env?.API_PAYLOAD_MAX_SIZE || "7mb"}));
@@ -29,7 +31,105 @@ if (!PROXY_HEADER) {
   process.exit(1);
 }
 
+const APP_BASIC_AUTH_USER = process?.env?.APP_BASIC_AUTH_USER;
+const APP_BASIC_AUTH_PASS = process?.env?.APP_BASIC_AUTH_PASS;
+if (!APP_BASIC_AUTH_USER || !APP_BASIC_AUTH_PASS) {
+  console.error("Error: Environment variables APP_BASIC_AUTH_USER and APP_BASIC_AUTH_PASS must be set.");
+  process.exit(1);
+}
+
+const AUTH_TOKEN_TTL_MS = Number(process?.env?.APP_AUTH_TOKEN_TTL_MS || 12 * 60 * 60 * 1000);
+const authSessions = new Map();
+
+function resolveGoogleAuthOptions() {
+  const inlineServiceAccountJson = process?.env?.GOOGLE_SERVICE_ACCOUNT_KEY_JSON;
+  if (inlineServiceAccountJson) {
+    try {
+      const credentials = JSON.parse(inlineServiceAccountJson);
+      if (!credentials.client_email || !credentials.private_key) {
+        throw new Error('Missing required fields client_email/private_key in GOOGLE_SERVICE_ACCOUNT_KEY_JSON.');
+      }
+      console.log('[Node Proxy] Using service account credentials from GOOGLE_SERVICE_ACCOUNT_KEY_JSON.');
+      return { credentials };
+    } catch (error) {
+      console.error('[Node Proxy] Failed to parse GOOGLE_SERVICE_ACCOUNT_KEY_JSON:', error.message);
+      process.exit(1);
+    }
+  }
+
+  const serviceAccountPath = process?.env?.GOOGLE_APPLICATION_CREDENTIALS;
+  if (serviceAccountPath) {
+    if (!fs.existsSync(serviceAccountPath)) {
+      console.error(`[Node Proxy] GOOGLE_APPLICATION_CREDENTIALS file not found: ${serviceAccountPath}`);
+      process.exit(1);
+    }
+    console.log(`[Node Proxy] Using service account key file from GOOGLE_APPLICATION_CREDENTIALS: ${serviceAccountPath}`);
+    return { keyFilename: serviceAccountPath };
+  }
+
+  console.log('[Node Proxy] Using Application Default Credentials (gcloud auth application-default login).');
+  return {};
+}
+
+function safeEquals(a, b) {
+  const left = Buffer.from(a || '');
+  const right = Buffer.from(b || '');
+  if (left.length !== right.length) return false;
+  return crypto.timingSafeEqual(left, right);
+}
+
+function issueSessionToken(username) {
+  const token = crypto.randomBytes(32).toString('hex');
+  const expiresAt = Date.now() + AUTH_TOKEN_TTL_MS;
+  authSessions.set(token, { username, expiresAt });
+  return { token, expiresAt };
+}
+
+function getAuthTokenFromRequest(req) {
+  const token = req.headers['x-app-auth'];
+  return typeof token === 'string' ? token : null;
+}
+
+function isValidSessionToken(token) {
+  if (!token) return false;
+  const session = authSessions.get(token);
+  if (!session) return false;
+  if (Date.now() > session.expiresAt) {
+    authSessions.delete(token);
+    return false;
+  }
+  return true;
+}
+
+function requireAppAuth(req, res, next) {
+  const token = getAuthTokenFromRequest(req);
+  if (!isValidSessionToken(token)) {
+    return res.status(401).json({ error: 'Unauthorized', message: 'Missing or invalid session token.' });
+  }
+  next();
+}
+
 app.set('trust proxy', 1 /* number of proxies between user and server */);
+
+app.post('/auth/login', (req, res) => {
+  const { username, password } = req.body || {};
+  if (typeof username !== 'string' || typeof password !== 'string') {
+    return res.status(400).json({ error: 'Bad Request', message: 'username and password are required.' });
+  }
+
+  const isValidUser = safeEquals(username, APP_BASIC_AUTH_USER);
+  const isValidPass = safeEquals(password, APP_BASIC_AUTH_PASS);
+  if (!isValidUser || !isValidPass) {
+    return res.status(401).json({ error: 'Unauthorized', message: 'Invalid credentials.' });
+  }
+
+  const { token, expiresAt } = issueSessionToken(username);
+  return res.status(200).json({ token, username, expiresAt });
+});
+
+app.get('/auth/session', requireAppAuth, (_req, res) => {
+  return res.status(200).json({ ok: true });
+});
 
 // IMPORTANT: Vertex AI Studio Rate Limiting
 // This rate limiting configuration protects your backend APIs from abuse.
@@ -46,6 +146,7 @@ const proxyLimiter = rateLimit({
 });
 // Apply the rate limiter to the /api-proxy route before the main proxy logic
 app.use('/api-proxy', proxyLimiter);
+app.use('/api-proxy', requireAppAuth);
 
 const API_CLIENT_MAP = [
  {
@@ -119,9 +220,9 @@ const API_CLIENT_MAP = [
   },
 ].map((client) => ({ ...client, patternInfo: parsePattern(client.patternForProxy) }));
 
-// Uses Google Application Default Credentials (ADC).
-// Users need to run "gcloud auth application-default login" in order to use the proxy.
+// Uses service-account key when configured, otherwise falls back to ADC.
 const auth = new GoogleAuth({
+  ...resolveGoogleAuthOptions(),
   scopes: ['https://www.googleapis.com/auth/cloud-platform'],
 });
 
@@ -162,15 +263,15 @@ function extractParams(patternInfo, url) {
 async function getAccessToken(res) {
   try {
     const authClient = await auth.getClient();
-    const token = await authClient.getAccessToken();
-    return token.token;
+    const tokenResponse = await authClient.getAccessToken();
+    return typeof tokenResponse === 'string' ? tokenResponse : tokenResponse?.token;
   } catch (error) {
     console.error('[Node Proxy] Authentication error:', error);
     if (!res) return null;
     if (error.code === 'ERR_GCLOUD_NOT_LOGGED_IN' || (error.message && error.message.includes('Could not load the default credentials'))) {
       res.status(401).json({
         error: 'Authentication Required',
-        message: 'Google Cloud Application Default Credentials not found or invalid. Please run "gcloud auth application-default login" and try again.',
+        message: 'Credentials not found or invalid. Set GOOGLE_APPLICATION_CREDENTIALS to your service account key file, or run "gcloud auth application-default login".',
       });
     } else {
       res.status(500).json({ error: `Authentication failed: ${error.message}` });
@@ -229,7 +330,7 @@ app.post('/api-proxy', async (req, res) => {
 
     const apiFetchOptions = {
       method: method || 'POST',
-      headers: {...apiHeaders, ...headers},
+      headers: {...headers, ...apiHeaders},
       body: body ? body : undefined,
     };
 
@@ -321,6 +422,12 @@ server.on('upgrade', async (request, socket, head) => {
   const url = new URL(request.url, `http://${request.headers.host}`);
 
   if (url.pathname === '/ws-proxy') {
+    const wsAuthToken = url.searchParams.get('authToken');
+    if (!isValidSessionToken(wsAuthToken)) {
+      socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+      socket.destroy();
+      return;
+    }
     
     let targetUrl = url.searchParams.get('target');
     if (!targetUrl) {

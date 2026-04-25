@@ -9,6 +9,7 @@
 (function() {
   const originalFetch = window.fetch;
   const originalWebSocket = window.WebSocket;
+  const proxyHeader = import.meta.env?.VITE_PROXY_HEADER;
 
   // Function to validate VertexGenAi endpoints
   function isValidUrl(url) {
@@ -71,12 +72,16 @@
     const inputUrl = typeof url === 'string' ? url : (url instanceof URL ? url.href : null);
 
     if (inputUrl && isValidUrl(inputUrl)) {
+      const authToken = sessionStorage.getItem('app_auth_token');
+      if (!authToken) {
+        throw new Error('Missing auth token. Please login again.');
+      }
       
       console.log('[Vertex AI Proxy Shim] Intercepted Vertex WebSocket request:', inputUrl);
       const targetUrl = encodeURIComponent(inputUrl);
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       const host = window.location.host;
-      const proxyUrl = `${protocol}//${host}/ws-proxy?target=${targetUrl}`;
+      const proxyUrl = `${protocol}//${host}/ws-proxy?target=${targetUrl}&authToken=${encodeURIComponent(authToken)}`;
       return new originalWebSocket(proxyUrl, protocols);
     }
     return new originalWebSocket(url, protocols);
@@ -107,13 +112,25 @@
       };
 
       try {
+        const authToken = sessionStorage.getItem('app_auth_token');
+        if (!authToken || !proxyHeader) {
+          return new Response(JSON.stringify({
+            error: 'Not authenticated',
+            message: 'Login is required before calling AI endpoints.',
+          }), {
+            status: 401,
+            headers: { 'Content-Type': 'application/json' },
+          });
+        }
+
         // Make a fetch request to the local Node JS proxy endpoint.
         const proxyFetchOptions = {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
             // Add a random header to identify these proxied requests on the Node.js backend.
-            'X-App-Proxy': 'E2CGQbhhNArm5Ot9-y-yR5F_k0n0qK1S',
+            'X-App-Proxy': proxyHeader,
+            'X-App-Auth': authToken,
           },
           body: JSON.stringify(requestDetails),
         };
