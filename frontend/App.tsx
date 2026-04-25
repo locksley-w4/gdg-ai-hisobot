@@ -307,23 +307,29 @@ export default function App() {
         </div>
 
         <div className="animate-in fade-in duration-300">
-          {activeTab === 'etl' && <FileUpload onDataExtracted={handleDataExtracted} />}
-          {activeTab === 'database' && <DataViewer records={records} />}
-          {activeTab === 'template' && (
-            <TemplateDesigner 
-              records={records} 
-              template={template} 
-              setTemplate={setTemplate} 
+          <div className={activeTab === 'etl' ? 'block' : 'hidden'}>
+            <FileUpload onDataExtracted={handleDataExtracted} />
+          </div>
+          <div className={activeTab === 'database' ? 'block' : 'hidden'}>
+            <DataViewer records={records} />
+          </div>
+          <div className={activeTab === 'template' ? 'block' : 'hidden'}>
+            <TemplateDesigner
+              records={records}
+              template={template}
+              setTemplate={setTemplate}
             />
-          )}
-          {activeTab === 'auditor' && (
-            <AuditorAnalyst 
-              records={records} 
-              report={auditReport} 
-              setReport={setAuditReport} 
+          </div>
+          <div className={activeTab === 'auditor' ? 'block' : 'hidden'}>
+            <AuditorAnalyst
+              records={records}
+              report={auditReport}
+              setReport={setAuditReport}
             />
-          )}
-          {activeTab === 'report' && <ReportGenerator records={records} template={template} />}
+          </div>
+          <div className={activeTab === 'report' ? 'block' : 'hidden'}>
+            <ReportGenerator records={records} template={template} />
+          </div>
         </div>
       </main>
     </div>

@@ -1,0 +1,60 @@
+services:
+  db:
+    image: postgres:15-alpine
+    restart: unless-stopped
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./backend/.env.local
+      - ./.env
+    environment:
+      - NODE_ENV=production
+      - API_BACKEND_HOST=0.0.0.0
+      - API_BACKEND_PORT=5000
+      - PROXY_HEADER=${PROXY_HEADER}
+      - APP_BASIC_AUTH_USER=${APP_BASIC_AUTH_USER}
+      - APP_BASIC_AUTH_PASS=${APP_BASIC_AUTH_PASS}
+      - GOOGLE_APPLICATION_CREDENTIALS=/app/credentials/service-account.json
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./backend/credentials:/app/credentials:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "const s=require('net').connect(5000,'127.0.0.1');s.on('connect',()=>{s.end();process.exit(0)});s.on('error',()=>process.exit(1));setTimeout(()=>process.exit(1),4000);"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.prod
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "80:80"
+
+volumes:
+  pgdata:

@@ -149,6 +149,18 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({ records, tem
     setSelectedFields((prev) => (prev.includes(field) ? prev.filter((f) => f !== field) : [...prev, field]));
   };
 
+  const handleSelectAllFilteredFields = () => {
+    setSelectedFields((prev) => {
+      const next = new Set(prev);
+      filteredFields.forEach((field) => next.add(field));
+      return Array.from(next);
+    });
+  };
+
+  const handleClearFilteredFields = () => {
+    setSelectedFields((prev) => prev.filter((field) => !filteredFields.includes(field)));
+  };
+
   const handleGenerateFromAI = async () => {
     if (selectedFields.length === 0) {
       setSaveError('Select at least one field for AI auto-fill.');
@@ -294,6 +306,22 @@ export const TemplateDesigner: React.FC<TemplateDesignerProps> = ({ records, tem
                 </label>
               </div>
               <div className="max-h-36 overflow-y-auto border border-slate-200 rounded-md bg-white p-2">
+                <div className="flex items-center justify-end gap-2 pb-2 mb-2 border-b border-slate-100">
+                  <button
+                    type="button"
+                    onClick={handleSelectAllFilteredFields}
+                    className="text-xs text-indigo-600 hover:text-indigo-700"
+                  >
+                    Select all
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleClearFilteredFields}
+                    className="text-xs text-slate-500 hover:text-slate-700"
+                  >
+                    Clear
+                  </button>
+                </div>
                 {filteredFields.length > 0 ? (
                   filteredFields.map((field) => (
                     <label key={field} className="flex items-center text-sm text-slate-700 py-1">

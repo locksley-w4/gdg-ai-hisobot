@@ -51,3 +51,32 @@ To install dependencies and run your Google Cloud Vertex AI Studio App locally, 
 
 ```bash
 npm install && npm run dev
+```
+
+## GCP VM Deployment (Docker Compose)
+
+Use this mode on a Compute Engine VM.
+
+1. Create a VM and allow inbound ports `80`, `5000`, and `22`.
+2. Install Docker Engine and Docker Compose plugin.
+3. Clone repository and create env files:
+```bash
+cp .env.example .env
+cp backend/.env.example backend/.env.local
+```
+4. Put service-account key at `backend/credentials/service-account.json`.
+5. Set strong values in `.env`:
+```bash
+PROXY_HEADER=<random-high-entropy-secret>
+APP_BASIC_AUTH_USER=<admin-user>
+APP_BASIC_AUTH_PASS=<strong-password>
+```
+6. Run production-style stack:
+```bash
+docker compose -f docker-compose.gcp.yml up -d --build
+```
+7. Validate services:
+```bash
+docker compose -f docker-compose.gcp.yml ps
+docker compose -f docker-compose.gcp.yml logs -f
+```
