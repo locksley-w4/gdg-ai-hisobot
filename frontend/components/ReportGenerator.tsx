@@ -1,11 +1,21 @@
 import React, { useMemo, useState } from 'react';
 import { FinancialRecord } from '../types.ts';
-import { Download, FileOutput, Loader2, TrendingUp } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { Download, FileOutput, Loader2, TrendingUp, BarChart3 } from 'lucide-react';
+import {
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+  BarChart,
+  Bar,
+} from 'recharts';
 import * as html2canvasModule from 'html2canvas';
 import { jsPDF } from 'jspdf';
 
-// Handle ESM default export variations
 const html2canvas = html2canvasModule.default || html2canvasModule;
 
 interface ReportGeneratorProps {
@@ -13,52 +23,92 @@ interface ReportGeneratorProps {
   template: string;
 }
 
+const priorityMetrics = ['total_revenue', 'net_income', 'operating_expenses', 'ebitda', 'gross_margin'];
+const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
+
+const formatValueByKey = (key: string, value: number) => {
+  if (key.includes('margin') || key.includes('ratio') || key.includes('percent')) {
+    return `${value.toFixed(2)}%`;
+  }
+  return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value);
+};
+
 export const ReportGenerator: React.FC<ReportGeneratorProps> = ({ records, template }) => {
   const [isExporting, setIsExporting] = useState(false);
 
-  const currentRecords = useMemo(() => records.filter(r => r.is_current), [records]);
+  const currentRecords = useMemo(() => records.filter((r) => r.is_current), [records]);
 
   const finalContent = useMemo(() => {
     let result = template;
-    currentRecords.forEach(record => {
+    currentRecords.forEach((record) => {
       const regex = new RegExp(`{{${record.key}}}`, 'g');
       const val = Number(record.value) || 0;
-      const formattedValue = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(val);
-      result = result.replace(regex, formattedValue);
+      result = result.replace(regex, formatValueByKey(record.key, val));
     });
     return result;
   }, [template, currentRecords]);
 
-  // Prepare data for charts (group by version)
-  const chartData = useMemo(() => {
-    if (records.length === 0) return [];
-    
-    const versions = Array.from(new Set(records.map(r => r.version))).sort((a, b) => a - b);
-    return versions.map(v => {
-      const dataPoint: any = { name: `v${v}` };
-      records.filter(r => r.version === v).forEach(r => {
-        dataPoint[r.key] = Number(r.value) || 0;
-      });
-      return dataPoint;
+  const historyByKey = useMemo(() => {
+    return records.reduce<Record<string, FinancialRecord[]>>((acc, record) => {
+      if (!acc[record.key]) acc[record.key] = [];
+      acc[record.key].push(record);
+      return acc;
+    }, {});
+  }, [records]);
+
+  const chartKeys = useMemo(() => {
+    const keys = Array.from(new Set(currentRecords.map((r) => r.key)));
+    return keys
+      .sort((a, b) => {
+        const indexA = priorityMetrics.indexOf(a);
+        const indexB = priorityMetrics.indexOf(b);
+        if (indexA !== -1 && indexB !== -1) return indexA - indexB;
+        if (indexA !== -1) return -1;
+        if (indexB !== -1) return 1;
+        const currentA = Math.abs(currentRecords.find((r) => r.key === a)?.value || 0);
+        const currentB = Math.abs(currentRecords.find((r) => r.key === b)?.value || 0);
+        return currentB - currentA;
+      })
+      .slice(0, 4);
+  }, [currentRecords]);
+
+  const timelineData = useMemo(() => {
+    const byTimestamp = records.reduce<Record<string, Record<string, number | string>>>((acc, record) => {
+      if (!acc[record.timestamp]) {
+        acc[record.timestamp] = {
+          timestamp: record.timestamp,
+          name: new Date(record.timestamp).toLocaleDateString(),
+        };
+      }
+      acc[record.timestamp][record.key] = Number(record.value) || 0;
+      return acc;
+    }, {});
+
+    return Object.values(byTimestamp).sort((a, b) => {
+      const t1 = new Date(String(a.timestamp)).getTime();
+      const t2 = new Date(String(b.timestamp)).getTime();
+      return t1 - t2;
     });
   }, [records]);
 
-  // Get top 3 keys to display in the chart to avoid clutter
-  const topKeys = useMemo(() => {
-    const keys = Array.from(new Set(records.map(r => r.key)));
-    // Prioritize common important metrics if they exist
-    const priority = ['total_revenue', 'net_income', 'operating_expenses', 'ebitda'];
-    return keys.sort((a, b) => {
-      const indexA = priority.indexOf(a);
-      const indexB = priority.indexOf(b);
-      if (indexA !== -1 && indexB !== -1) return indexA - indexB;
-      if (indexA !== -1) return -1;
-      if (indexB !== -1) return 1;
-      return 0;
-    }).slice(0, 3);
-  }, [records]);
-
-  const colors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6'];
+  const currentBarData = useMemo(() => {
+    return chartKeys.map((key) => {
+      const current = currentRecords.find((record) => record.key === key);
+      const series = (historyByKey[key] || []).slice().sort((a, b) => b.version - a.version);
+      const prev = series[1];
+      const currentValue = Number(current?.value || 0);
+      const previousValue = Number(prev?.value || 0);
+      const delta = currentValue - previousValue;
+      const deltaPct = previousValue !== 0 ? (delta / previousValue) * 100 : null;
+      return {
+        key,
+        value: currentValue,
+        previousValue,
+        delta,
+        deltaPct,
+      };
+    });
+  }, [chartKeys, currentRecords, historyByKey]);
 
   const handleDownloadPDF = async () => {
     setIsExporting(true);
@@ -66,26 +116,23 @@ export const ReportGenerator: React.FC<ReportGeneratorProps> = ({ records, templ
       const element = document.getElementById('report-content');
       if (!element) return;
 
-      // Use the resolved html2canvas function
       const generateCanvas = typeof html2canvas === 'function' ? html2canvas : (html2canvas as any).default;
-      
       const canvas = await generateCanvas(element, {
-        scale: 2, // Higher resolution
+        scale: 2,
         useCORS: true,
-        logging: false
+        logging: false,
       });
 
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
-      
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
-      
+
       pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
       pdf.save('financial_report.pdf');
     } catch (error) {
-      console.error("Failed to generate PDF", error);
-      alert("Failed to generate PDF. Please try again.");
+      console.error('Failed to generate PDF', error);
+      alert('Failed to generate PDF. Please try again.');
     } finally {
       setIsExporting(false);
     }
@@ -99,7 +146,7 @@ export const ReportGenerator: React.FC<ReportGeneratorProps> = ({ records, templ
             <FileOutput className="w-6 h-6 text-emerald-600 mr-3" />
             <div>
               <h2 className="text-lg font-semibold text-slate-800">Final Report Generation</h2>
-              <p className="text-sm text-slate-600">Review rich dashboard and export to PDF</p>
+              <p className="text-sm text-slate-600">Richer trend and delta insights with PDF export</p>
             </div>
           </div>
           <button
@@ -107,22 +154,16 @@ export const ReportGenerator: React.FC<ReportGeneratorProps> = ({ records, templ
             disabled={isExporting || records.length === 0}
             className="flex items-center px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 transition-colors shadow-sm"
           >
-            {isExporting ? (
-              <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-            ) : (
-              <Download className="w-4 h-4 mr-2" />
-            )}
+            {isExporting ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Download className="w-4 h-4 mr-2" />}
             {isExporting ? 'Generating...' : 'Export PDF'}
           </button>
         </div>
-        
+
         <div className="p-8 bg-slate-200 flex justify-center overflow-x-auto">
-          {/* The actual report content to be captured by html2canvas */}
-          <div 
-            id="report-content" 
+          <div
+            id="report-content"
             className="bg-white w-[210mm] min-h-[297mm] shadow-xl p-12 text-slate-800 border border-slate-300 flex flex-col"
           >
-            {/* Header */}
             <div className="border-b-2 border-slate-800 pb-6 mb-8 flex justify-between items-end">
               <div>
                 <h1 className="text-4xl font-bold text-slate-900 tracking-tight">Financial Report</h1>
@@ -134,48 +175,78 @@ export const ReportGenerator: React.FC<ReportGeneratorProps> = ({ records, templ
               </div>
             </div>
 
-            {/* Text Content */}
-            <div className="prose prose-slate max-w-none whitespace-pre-wrap font-serif mb-12">
-              {finalContent}
-            </div>
-
-            {/* Visualizations */}
-            {chartData.length > 0 && (
-              <div className="mt-auto pt-8 border-t border-slate-200">
-                <div className="flex items-center mb-6">
-                  <TrendingUp className="w-5 h-5 text-blue-600 mr-2" />
-                  <h3 className="text-xl font-bold text-slate-800">Historical Trends (SCD Type 2)</h3>
-                </div>
-                
-                <div className="grid grid-cols-1 gap-8">
-                  <div className="h-72 w-full">
-                    <ResponsiveContainer width="100%" height="100%">
-                      <LineChart data={chartData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                        <XAxis dataKey="name" stroke="#64748b" />
-                        <YAxis stroke="#64748b" tickFormatter={(value) => `$${value >= 1000 ? (value/1000).toFixed(1) + 'k' : value}`} />
-                        <Tooltip 
-                          formatter={(value: number) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(value)}
-                          contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                        />
-                        <Legend wrapperStyle={{ paddingTop: '20px' }} />
-                        {topKeys.map((key, index) => (
-                          <Line 
-                            key={key} 
-                            type="monotone" 
-                            dataKey={key} 
-                            stroke={colors[index % colors.length]} 
-                            strokeWidth={3}
-                            activeDot={{ r: 8 }} 
-                            isAnimationActive={false} /* Disabled animation for reliable html2canvas capture */
-                          />
-                        ))}
-                      </LineChart>
-                    </ResponsiveContainer>
+            {currentBarData.length > 0 && (
+              <div className="grid grid-cols-2 gap-4 mb-8">
+                {currentBarData.slice(0, 4).map((metric) => (
+                  <div key={metric.key} className="border border-slate-200 rounded-lg p-4">
+                    <p className="text-xs uppercase tracking-wide text-slate-500">{metric.key}</p>
+                    <p className="text-xl font-semibold text-slate-800 mt-1">
+                      {formatValueByKey(metric.key, metric.value)}
+                    </p>
+                    <p className={`text-xs mt-1 ${metric.delta >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                      {metric.delta >= 0 ? 'Up' : 'Down'} {formatValueByKey(metric.key, Math.abs(metric.delta))}
+                      {metric.deltaPct !== null ? ` (${metric.deltaPct >= 0 ? '+' : ''}${metric.deltaPct.toFixed(2)}%)` : ''}
+                    </p>
                   </div>
+                ))}
+              </div>
+            )}
+
+            <div className="prose prose-slate max-w-none whitespace-pre-wrap font-serif mb-10">{finalContent}</div>
+
+            {timelineData.length > 0 && chartKeys.length > 0 && (
+              <div className="pt-6 border-t border-slate-200">
+                <div className="flex items-center mb-4">
+                  <TrendingUp className="w-5 h-5 text-blue-600 mr-2" />
+                  <h3 className="text-xl font-bold text-slate-800">Metric Trend Timeline</h3>
                 </div>
-                <p className="text-xs text-center text-slate-400 mt-6 italic">
-                  * Chart displays the top {topKeys.length} metrics across historical versions.
+                <div className="h-72 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={timelineData} margin={{ top: 5, right: 30, left: 20, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="name" stroke="#64748b" />
+                      <YAxis stroke="#64748b" />
+                      <Tooltip
+                        formatter={(value: number, name: string) => formatValueByKey(name, Number(value))}
+                        contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
+                      />
+                      <Legend wrapperStyle={{ paddingTop: '20px' }} />
+                      {chartKeys.map((key, index) => (
+                        <Line
+                          key={key}
+                          type="monotone"
+                          dataKey={key}
+                          stroke={colors[index % colors.length]}
+                          strokeWidth={3}
+                          activeDot={{ r: 6 }}
+                          isAnimationActive={false}
+                        />
+                      ))}
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+            )}
+
+            {currentBarData.length > 0 && (
+              <div className="pt-8">
+                <div className="flex items-center mb-4">
+                  <BarChart3 className="w-5 h-5 text-indigo-600 mr-2" />
+                  <h3 className="text-xl font-bold text-slate-800">Current Metric Comparison</h3>
+                </div>
+                <div className="h-72 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={currentBarData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="key" stroke="#64748b" />
+                      <YAxis stroke="#64748b" />
+                      <Tooltip formatter={(value: number, name: string) => formatValueByKey(name, Number(value))} />
+                      <Bar dataKey="value" fill="#2563eb" radius={[4, 4, 0, 0]} isAnimationActive={false} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+                <p className="text-xs text-center text-slate-400 mt-4 italic">
+                  Chart and cards prioritize high-impact metrics and show movement from previous versions.
                 </p>
               </div>
             )}

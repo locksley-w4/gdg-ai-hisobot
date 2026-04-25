@@ -16,13 +16,14 @@ interface AuditorAnalystProps {
 export const AuditorAnalyst: React.FC<AuditorAnalystProps> = ({ records, report, setReport }) => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [htmlContent, setHtmlContent] = useState('');
+  const [language, setLanguage] = useState<'en' | 'uz' | 'ru'>('en');
 
   const handleAnalyze = async () => {
     setIsAnalyzing(true);
     try {
       const currentData = records.filter(r => r.is_current);
       const historicalData = records.filter(r => !r.is_current);
-      const result = await generateAuditReport(currentData, historicalData);
+      const result = await generateAuditReport(currentData, historicalData, language);
       setReport(result);
     } catch (error) {
       console.error("Analysis failed", error);
@@ -74,6 +75,18 @@ export const AuditorAnalyst: React.FC<AuditorAnalystProps> = ({ records, report,
             )}
             {isAnalyzing ? 'Analyzing...' : (report ? 'Re-run Audit' : 'Run Audit')}
           </button>
+        </div>
+        <div className="px-6 py-3 border-t border-slate-100 bg-white/70">
+          <label className="text-sm text-slate-600 mr-2">Report language:</label>
+          <select
+            value={language}
+            onChange={(e) => setLanguage(e.target.value as 'en' | 'uz' | 'ru')}
+            className="px-3 py-1.5 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+          >
+            <option value="en">English</option>
+            <option value="uz">Uzbek</option>
+            <option value="ru">Russian</option>
+          </select>
         </div>
 
         <div className="p-8 min-h-[400px] bg-slate-50">

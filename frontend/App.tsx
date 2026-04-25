@@ -9,18 +9,26 @@ import { LayoutDashboard, Database, FileEdit, ShieldCheck, FileOutput, Lock } fr
 
 const DEFAULT_TEMPLATE = `Quarterly Financial Summary
 
-Revenue Overview
-----------------
-Total Revenue for the period was {{total_revenue}}. 
-Operating expenses amounted to {{operating_expenses}}, resulting in a Net Income of {{net_income}}.
+1. Executive Snapshot
+- Total Revenue: {{total_revenue}}
+- Net Income: {{net_income}}
+- EBITDA: {{ebitda}}
+- Gross Margin: {{gross_margin}}
 
-Profitability Metrics
----------------------
-EBITDA: {{ebitda}}
-Gross Margin: {{gross_margin}}
+2. Operational Health
+Operating expenses were {{operating_expenses}}. Based on current profitability and margin levels, management should review cost pressure drivers and efficiency opportunities.
 
-Notes:
-This report is automatically generated using the latest versioned data from the repository.`;
+3. Risk Signals
+- Compare profitability versus prior versions to identify sudden reversals.
+- Validate whether expense growth is outpacing revenue growth.
+- Flag unusual margin compression and potential reporting inconsistencies.
+
+4. Action Plan
+- Reconcile key anomalies with source documents.
+- Prioritize corrective actions for metrics with negative trend direction.
+- Track remediation progress in next reporting cycle.
+
+Generated automatically using current SCD2 records.`;
 
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -58,6 +66,7 @@ export default function App() {
     setRecords(prevRecords => {
       const updatedRecords = [...prevRecords];
       const timestamp = new Date().toISOString();
+      const activeEditor = sessionStorage.getItem('app_auth_user') || username || 'unknown';
 
       newMetrics.forEach(metric => {
         // Find existing current record for this key
@@ -85,7 +94,8 @@ export default function App() {
           version: nextVersion,
           is_current: true,
           timestamp,
-          source_file: filename
+          source_file: filename,
+          editor_name: activeEditor,
         });
       });
 
@@ -95,7 +105,7 @@ export default function App() {
     setActiveTab('database');
     // Reset audit report when new data arrives so they are prompted to re-run
     setAuditReport(null);
-  }, []);
+  }, [username]);
 
   const tabs = [
     { id: 'etl', label: 'Ingestion & ETL', icon: LayoutDashboard },
