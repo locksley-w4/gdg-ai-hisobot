@@ -54,9 +54,9 @@ async function migrate() {
         'INSERT INTO users (username, password_hash, role) VALUES ($1, $2, $3)',
         [adminUsername, hash, 'admin']
       );
-      console.log(`Admin user '${adminUsername}' created.`);
+      console.log('Admin user created.');
     } else {
-      console.log(`Admin user '${adminUsername}' already exists.`);
+      console.log('Admin user already exists.');
     }
 
     console.log('Database migration completed successfully.');

@@ -1,10 +1,20 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const pool = require('../config/database');
 const { authenticateToken } = require('../middleware/auth');
 
 const router = express.Router();
 
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests, please try again later.' },
+});
+
 router.use(authenticateToken);
+router.use(apiLimiter);
 
 router.get('/', async (req, res) => {
   try {
