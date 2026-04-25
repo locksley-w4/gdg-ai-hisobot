@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { FinancialRecord } from '../types.ts';
 import { Download, FileOutput, Loader2, TrendingUp, BarChart3 } from 'lucide-react';
 import {
@@ -15,8 +15,11 @@ import {
 } from 'recharts';
 import * as html2canvasModule from 'html2canvas';
 import { jsPDF } from 'jspdf';
+import * as markedModule from 'marked';
 
 const html2canvas = html2canvasModule.default || html2canvasModule;
+const marked = markedModule.marked || markedModule;
+const escapeHtml = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
 interface ReportGeneratorProps {
   records: FinancialRecord[];
@@ -35,6 +38,7 @@ const formatValueByKey = (key: string, value: number) => {
 
 export const ReportGenerator: React.FC<ReportGeneratorProps> = ({ records, template }) => {
   const [isExporting, setIsExporting] = useState(false);
+  const [finalContentHtml, setFinalContentHtml] = useState('');
 
   const currentRecords = useMemo(() => records.filter((r) => r.is_current), [records]);
 
@@ -47,6 +51,20 @@ export const ReportGenerator: React.FC<ReportGeneratorProps> = ({ records, templ
     });
     return result;
   }, [template, currentRecords]);
+
+  useEffect(() => {
+    try {
+      const parsed = marked.parse(finalContent);
+      if (parsed instanceof Promise) {
+        parsed.then(setFinalContentHtml);
+      } else {
+        setFinalContentHtml(parsed);
+      }
+    } catch (error) {
+      console.error('Failed to parse markdown for report content', error);
+      setFinalContentHtml(`<pre>${escapeHtml(finalContent)}</pre>`);
+    }
+  }, [finalContent]);
 
   const historyByKey = useMemo(() => {
     return records.reduce<Record<string, FinancialRecord[]>>((acc, record) => {
@@ -125,10 +143,23 @@ export const ReportGenerator: React.FC<ReportGeneratorProps> = ({ records, templ
 
       const imgData = canvas.toDataURL('image/png');
       const pdf = new jsPDF('p', 'mm', 'a4');
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = (canvas.height * pdfWidth) / canvas.width;
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      const imgWidth = pageWidth;
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-      pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+      let heightLeft = imgHeight;
+      let position = 0;
+
+      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+      heightLeft -= pageHeight;
+
+      while (heightLeft > 0) {
+        position = heightLeft - imgHeight;
+        pdf.addPage();
+        pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
+        heightLeft -= pageHeight;
+      }
       pdf.save('financial_report.pdf');
     } catch (error) {
       console.error('Failed to generate PDF', error);
@@ -192,7 +223,10 @@ export const ReportGenerator: React.FC<ReportGeneratorProps> = ({ records, templ
               </div>
             )}
 
-            <div className="prose prose-slate max-w-none whitespace-pre-wrap font-serif mb-10">{finalContent}</div>
+            <div
+              className="prose prose-slate max-w-none font-serif mb-10"
+              dangerouslySetInnerHTML={{ __html: finalContentHtml }}
+            />
 
             {timelineData.length > 0 && chartKeys.length > 0 && (
               <div className="pt-6 border-t border-slate-200">
