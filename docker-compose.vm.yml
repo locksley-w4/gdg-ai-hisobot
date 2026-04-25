@@ -32,6 +32,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.prod
+      args:
+        - VITE_PROXY_HEADER=${PROXY_HEADER}
     restart: unless-stopped
     depends_on:
       backend:

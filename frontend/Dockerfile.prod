@@ -1,6 +1,8 @@
 FROM node:22-alpine AS build
 
 WORKDIR /app
+ARG VITE_PROXY_HEADER
+ENV VITE_PROXY_HEADER=$VITE_PROXY_HEADER
 
 COPY package*.json ./
 RUN npm install
